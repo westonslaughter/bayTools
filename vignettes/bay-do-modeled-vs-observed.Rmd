@@ -1,0 +1,30 @@
+---
+title: "bay-do-modeled-vs-observed"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{bay-do-modeled-vs-observed}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+```{r setup}
+library(bayTools)
+```
+
+In this document, we will explore observed dissolved oxygen concentrations from continuous monitoring stations operated in the Potomac River by Maryland, Virginia, and the U.S. federal government.
+
+We will be specifically investigating observed dissolved oxygen concentrations in contrast with predicted dissolved oxygen equilibrium concentrations from standard physical models based on water temperature, salinity, and atmospheric pressure. 
+
+Before we can begin our analysis, we must compile all necessary data. For now, we can start with a dataset of MD "Eyes on the Bay" continuous monitoring station data.
+
+```{r}
+# make 
+
+```

@@ -1,0 +1,10 @@
+# Longitudinal Analysis of WQM Data
+
+
+# read in WMS water quality monitoring site data
+
+``` {r}
+# pull in WMS WQM sites with NHD info
+site_info_wqm <- site_gather_wqm("nhd")
+
+``` 
