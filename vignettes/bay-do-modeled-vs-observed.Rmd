@@ -25,6 +25,37 @@ We will be specifically investigating observed dissolved oxygen concentrations i
 Before we can begin our analysis, we must compile all necessary data. For now, we can start with a dataset of MD "Eyes on the Bay" continuous monitoring station data.
 
 ```{r}
-# make 
+# MD EOTB: https://eyesonthebay.dnr.maryland.gov/
+
+# look at just one station, Mallow's Bay (MAB)
+load(file.path(getwd(), '..', 'data', 'conmon_eotb.rda'))
+
+eotb <- conmon_eotb_2001_2022 %>%
+  filter(grepl('XDA8236', station))
+
+head(eotb) 
+
+eotb.min <- eotb %>%
+  mutate(
+    date = lubridate::as_date(date_time),
+    year = lubridate::year(date),
+  ) %>%
+  group_by(station, year, date) %>%
+  summarize(
+    do_min = min(do),
+    do_min_time = format(date_time[which(do == do_min)], format = "%H:%M"),
+    year = max(year),
+    month = max(lubridate::month(date)),
+    quarter = max(lubridate::quarter(date)),
+  ) %>%
+  filter(
+    year == 2019,
+  )
+
+gg.mab <- ggplot(eotb.min) +
+  geom_point(aes(x = date, y = do_min_time, col = do_min)) +
+  facet_wrap(~year)
+
+gg.mab
 
 ```

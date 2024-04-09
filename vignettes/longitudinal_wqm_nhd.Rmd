@@ -1,0 +1,106 @@
+---
+title: "longitudinal water quality data analysis"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{longitudinal water quality data analysis}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+```{r setup}
+library(bayTools)
+
+# plotting libraries
+library(ggplot2)
+
+```
+
+Retrieve WQM site data with NHD-comid data attached
+```{r}
+site_data <- bt_get_site_data()
+```
+
+Retrieve WQM field and lab data, query in weather data from Openmeteo API
+```{r}
+wqm_data <- bt_get_wqm_data()
+```
+Let's plot a couple elements longitudinally!
+
+```{r}
+# Let's use only data from the September 2023 PRKN longitudinal samples
+prkn_lss <- wqm_data %>%
+  filter(
+    survey_type == 'synoptic',
+    Date == "230920" | Date == "230927",
+    !grepl('dup', sample_name),
+  ) %>%
+  mutate(
+    event = ifelse(Date == "230920", "before", "after"),
+    )
+
+prkn_lss_nhd <- prkn_lss %>% 
+  left_join(site_data, by = 'site_code')
+
+colnames(prkn_lss_nhd)
+
+head(prkn_lss_nhd$pathlength)
+head(prkn_lss_nhd$`K mg/L`)
+
+elements <- c("Sr mg/L", "Mn mg/L", 
+              "Mg mg/L", "Ca mg/L", 
+              "Fe mg/L", "K mg/L",
+              "Na mg/L", "a254")
+
+
+margin_cm <- c(rep(as.character(length(elements)*2), 4), "cm")
+rm(element_plots)
+
+element_plots <- lapply(elements, 
+                        function(key){
+                            gg.prkn_lss <- ggplot(prkn_lss_nhd) +
+                             geom_point(
+                               aes(x = pathlength, y = get(key), col = event, 
+                                   text = paste("site:", site_code)),
+                               size = 3,
+                               position = position_jitter(w = 0.01, h = 0.01)
+                               ) +
+                                scale_x_reverse() +
+                                ggsci::scale_color_npg() +
+                                xlab("River Miles Site to Potomac River Outlet (NHD)") +
+                                ylab(key) +
+                                theme_minimal() +
+                                theme(
+                                  text = element_text(size = 18),
+                                  plot.margin = margin(margin_cm)
+                                  ) # +
+                                # ggtitle(paste('', key))
+                            
+                            gg.prkn_lss
+                          }
+                        )
+
+allplots <- ggpubr::ggarrange(
+                      plotlist= element_plots,
+                      ncol = round(length(elements)/4), 
+                      nrow = round(length(elements)/2),
+                      common.legend=TRUE
+                      )
+
+allplots
+
+ggpubr::annotate_figure(allplots, 
+                top = ggpubr::text_grob("PRKN September 2024, UMD Elemental Analysis\n", 
+                color = "black", 
+                face = "bold", 
+                size = 18))
+
+# explore interactively
+plotly::ggplotly(element_plots[[5]])
+```

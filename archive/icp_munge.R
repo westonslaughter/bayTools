@@ -1,8 +1,9 @@
 require(dplyr)
 
 # clean and save ICP data
-df.raw <- readxl::read_xlsx('./data/ICP/20231222_WMS_PRKNPostProcessed_230920_230927_results/20231222_WMS_PRKNPostProcessed_230920_230927.xlsx',
-                            sheet = 'postprocessed')
+# df.raw <- readxl::read_xlsx('./data/ICP/20231221_WMS_PRKNPostProcessed_230920_230927_results/20231222_WMS_PRKNPostProcessed_230920_230927.xlsx',
+                            # sheet = 'postprocessed')
+df.raw <- icp_raw
 
 ## retrieve avaerage concentraiton estimates for [Element] mg/L
 df.f <- df.raw[grep("^[A-Z]{1}[a-z]{0,1} Quant Average", names(df.raw))]
@@ -23,9 +24,12 @@ df.icp.f <- df.icp.f[!grepl("WB1|SP18", df.icp.f$`Sample Name`),]
 # seperate _dilX.X into own column, remove from sample name
 ## df.icp.f <- df.icp[grepl("_dil[0-9]\\.[0-9]+", df.icp$`Sample Name`),]
 
-
 df.icp.f$dilution <- stringr::str_extract(df.icp.f$`Sample Name`, "_dil[0-9]\\.[0-9]+")
 df.icp.f$`Sample Name` <- gsub("_dil[0-9]\\.[0-9]+", "", df.icp.f$`Sample Name`)
+
+# make dilution numeric
+
+df.icp.f$dilution = as.numeric(gsub("[^0-9.-]", "", df.icp.f$dilution))
 
 # NOTE: comment out if not needed
 # custom code for if site/date order is backwards, optional
@@ -45,7 +49,13 @@ main.icp <- googlesheets4::read_sheet(ss = "https://docs.google.com/spreadsheets
                                       sheet = "data")
 
 all.icp <- main.icp %>%
+  mutate(
+    sample_name = paste0(Site, "d", Date)
+  )
+
+all.icp <- all.icp %>%
   left_join(df.icp.f, by = 'sample_name')
+
 
 
 if(exists("df.icp.all")) {
@@ -70,12 +80,18 @@ for(var in names(df.f)) {
 
      df.icp.all <- icp.i %>%
        mutate(
+         # if main lab data sheet has no data for this site/datetime, replace with current vals
             !!var := ifelse(is.na(.data[[var.x]]), .data[[var.y]], .data[[var.x]]),
+         # flag below (L) and above (H) detection limit in own column
             !!var__flag := ifelse(grepl(" L", .data[[var]]), "BDL", NA),
             !!var__flag := ifelse(grepl(" H", .data[[var]]), "ADL", NA),
+         # and then remove to make concentration vals numeric
             !!var := gsub(" L", "", .data[[var]]),
             !!var := gsub(" H", "", .data[[var]]),
             !!var := as.numeric(.data[[var]], na.pass = TRUE),
+         # apply dilution if dilution value present
+            !!var := ifelse(!is.na(dilution), .data[[var]] * dilution, .data[[var]]),
+            
         ) %>%
        select(-.data[[var.x]], -.data[[var.y]])
 
