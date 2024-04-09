@@ -21,7 +21,7 @@ library(googlesheets4)
 library(ggplot2)
 library(corrplot)
 
-cmc.prkn <- read.csv('data/PRKN_2023.csv')
+cmc.prkn <- read.csv('data/PRKN_2023_plus.csv')
 
 head(cmc.prkn)
 
@@ -29,7 +29,7 @@ cmc.prkn.f <- cmc.prkn %>%
   mutate(
     site_code = stringr::str_replace(
                            stringr::str_extract(cmc.prkn$StationName, '([^-]+)(?:-)[0-9]{1,2}'),
-                           "-", ""),
+                           " |-", ""),
     datetime = paste(Date, Time),
     air_temp = Air.temperature..AT.1.,
     latitude = Latitude,
@@ -80,7 +80,10 @@ wq.pr.f <- wq.pr %>%
          !is.na(`Fe mg/L`),
          !is.infinite(ecoli),
          !is.infinite(`Fe mg/L`),
-         )
+         ) %>%
+  mutate(
+    ecoli_ln = log(ecoli)
+  )
 
 ggplot(wq.pr.f) +
   geom_point(aes(x = `Fe mg/L`,
@@ -115,10 +118,11 @@ wq.pr.corr.before <- wq.pr.corr.before.df %>%
 wq.pr.corr.after <- wq.pr.corr.after.df %>%
   cor()
 
-testRes = cor.mtest(wq.pr.corr.df, conf.level = 0.95)
 
 # plot all, before, after
-corrplot(wq.pr.corr,
+testRes = cor.mtest(wq.pr.corr.df, conf.level = 0.95)
+wq.pr.corrplot <- corrplot(wq.pr.corr,
+         title = "\nSeptember PRKN, Before and After Storm",
          p.mat = testRes$p,
          method = 'color',
          diag = FALSE,
@@ -128,36 +132,33 @@ corrplot(wq.pr.corr,
          insig = 'label_sig',
          pch.col = 'grey20',
          order = 'AOE')
-wq.pr.corrplot <- corrplot(wq.pr.corr,
-                           nethod = 'color',
-         ## insig='blank',
-         insig = 'label_sig',
-         pch.cex = 10.9,
-         pch.col = 'grey20',
-         sig.level = c(0.001, 0.01, 0.05),
-         ## addCoef.col ='black',
-         ## number.cex = 0.8,
-         type = 'lower',
-         diag = FALSE,
-         )
 
 
+testRes.before = cor.mtest(wq.pr.corr.before.df, conf.level = 0.95)
 wq.pr.corrplot.before <- corrplot(wq.pr.corr.before,
-         insig='blank',
-         ## addCoef.col ='black',
-         ## number.cex = 0.8,
-         type = 'lower',
+         title = "\nSeptember PRKN, Before Storm",
+         p.mat = testRes.before$p,
+         method = 'color',
          diag = FALSE,
-         )
+         type = 'upper',
+         sig.level = c(0.001, 0.01, 0.05),
+         pch.cex = 0.9,
+         insig = 'label_sig',
+         pch.col = 'grey20',
+         order = 'AOE')
 
+
+testRes.after = cor.mtest(wq.pr.corr.after.df, conf.level = 0.95)
 wq.pr.corrplot.after <- corrplot(wq.pr.corr.after,
-         insig='blank',
-         ## addCoef.col ='black',
-         ## number.cex = 0.8,
-         type = 'lower',
+         title = "\nSeptember PRKN, After Storm",
+         p.mat = testRes.after$p,
+         method = 'color',
          diag = FALSE,
-         )
-
-
+         type = 'upper',
+         sig.level = c(0.001, 0.01, 0.05, 0.1),
+         pch.cex = 0.9,
+         insig = 'label_sig',
+         pch.col = 'grey20',
+         order = 'AOE')
 
 ```
