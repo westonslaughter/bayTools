@@ -23,7 +23,7 @@ bt_get_wqm_data <- function(
   # summarize wq field data to get relevant info (start/end date)
   wq.field.stat <- wq.field %>%
     group_by(Site) %>%
-    summarise(
+    summarize(
       start_date = min(Date),
       end_date = max(Date)
     ) %>%

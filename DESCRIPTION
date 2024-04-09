@@ -16,10 +16,9 @@ Suggests:
     testthat (>= 3.0.0)
 VignetteBuilder: knitr
 Depends: 
-    R (>= 2.10)
+    R (>= 2.10), dplyr
 LazyData: true
 Imports: 
-    dplyr,
     googlesheets4,
     magrittr,
     openmeteo,

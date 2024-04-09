@@ -49,7 +49,13 @@ main.icp <- googlesheets4::read_sheet(ss = "https://docs.google.com/spreadsheets
                                       sheet = "data")
 
 all.icp <- main.icp %>%
+  mutate(
+    sample_name = paste0(Site, "d", Date)
+  )
+
+all.icp <- all.icp %>%
   left_join(df.icp.f, by = 'sample_name')
+
 
 
 if(exists("df.icp.all")) {

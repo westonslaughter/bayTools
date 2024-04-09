@@ -53,14 +53,23 @@ colnames(prkn_lss_nhd)
 head(prkn_lss_nhd$pathlength)
 head(prkn_lss_nhd$`K mg/L`)
 
-elements <- c("Sr mg/L", "Mn mg/L", "Mg mg/L", "Ca mg/L")
+elements <- c("Sr mg/L", "Mn mg/L", 
+              "Mg mg/L", "Ca mg/L", 
+              "Fe mg/L", "K mg/L",
+              "Na mg/L", "a254")
+
+
+margin_cm <- c(rep(as.character(length(elements)*2), 4), "cm")
+rm(element_plots)
 
 element_plots <- lapply(elements, 
                         function(key){
                             gg.prkn_lss <- ggplot(prkn_lss_nhd) +
                              geom_point(
-                               aes(x = pathlength, y = get(key), col = event),
-                               size = 3
+                               aes(x = pathlength, y = get(key), col = event, 
+                                   text = paste("site:", site_code)),
+                               size = 3,
+                               position = position_jitter(w = 0.01, h = 0.01)
                                ) +
                                 scale_x_reverse() +
                                 ggsci::scale_color_npg() +
@@ -69,9 +78,9 @@ element_plots <- lapply(elements,
                                 theme_minimal() +
                                 theme(
                                   text = element_text(size = 18),
-                                  plot.margin = margin(1.5,1.5,1.5,1.5, "cm")
-                                  ) +
-                                ggtitle(paste('', key))
+                                  plot.margin = margin(margin_cm)
+                                  ) # +
+                                # ggtitle(paste('', key))
                             
                             gg.prkn_lss
                           }
@@ -79,7 +88,7 @@ element_plots <- lapply(elements,
 
 allplots <- ggpubr::ggarrange(
                       plotlist= element_plots,
-                      ncol = round(length(elements)/2), 
+                      ncol = round(length(elements)/4), 
                       nrow = round(length(elements)/2),
                       common.legend=TRUE
                       )
@@ -92,5 +101,6 @@ ggpubr::annotate_figure(allplots,
                 face = "bold", 
                 size = 18))
 
-
+# explore interactively
+plotly::ggplotly(element_plots[[5]])
 ```
