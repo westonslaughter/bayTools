@@ -1,0 +1,935 @@
+---
+title: "conmon_do_minima"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{conmon_do_minima}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+```{r setup}
+
+library(bayTools)
+
+library(dplyr)
+library(sf)
+library(ggplot2)
+
+
+library(mapview) # html mapping
+library(leaflet) # html mapping
+library(leaflet.extras)
+library(ggplot2) # plotting
+library(dplyr) # wrangling data
+library(here) # setting directories safely
+library(viridis) # color scheme
+library(USAboundaries) # county/state boundaries
+library(nhdplusTools) # USGS/NHD rivers data
+# further geospatial tools
+library(nngeo)
+library(measurements)
+library(lwgeom)
+library(elevatr)
+library(rgeos)
+
+load('data/conmon_eotb_2001_2022_2023_08_11_1707.rda')
+load('data/conmon_vecos_2003_2022_2023_08_11_1739_rev2023_10_28.rda')
+
+# find common columns between MDDNR and VECOS
+common_cols <- intersect(colnames(conmon_eotb_2001_2022), colnames(conmon_vecos_2003_2022))
+
+conmon_eotb <- subset(conmon_eotb_2001_2022, select = common_cols)
+conmon_vecos <- subset(conmon_vecos_2003_2022, select = common_cols)
+
+# read in station data
+
+cb_stations_manual.r <- googlesheets4::read_sheet(ss = "https://docs.google.com/spreadsheets/d/1RrHvZfj1uJv9rUkVST4lMzTiD6UWWNVmZwCIHBOpJuk/edit#gid=0"
+                                                )
+
+cb_stations_manual <- cb_stations_manual.r %>%
+  filter(!is.na(site_code)) %>%
+  ## filter(start_year < 2009, end_year > 2007) %>%
+  rename(station = site_code) 
+
+# enter POI of most downstream station, or, downstream reference
+poi_ds <- c(-77.264213, 38.365934)
+ds_station_poi <- st_sfc(st_point(poi_ds), crs = 4326)
+
+(ds_station_poi_comid <- discover_nhdplus_id(ds_station_poi))
+
+# first make a list defining the sourcetype and ID
+ds_station_poi_list <- list(featureSource = "comid",
+                  featureID = ds_station_poi_comid)
+
+# get upstream flowlines
+ds_station_poi_us_flowlines <- navigate_nldi(nldi_feature = ds_station_poi_list,
+                                   mode = "UM",
+                                   distance = 80,
+                                   data_source = "")
+
+ds_station_poi_ds_flowlines <- navigate_nldi(nldi_feature = ds_station_poi_list,
+                                   mode = "DM",
+                                   distance = 400,
+                                   data_source = "")
+
+# make a list of all the comids we've identified:
+all_comids <- c(ds_station_poi_us_flowlines$UM_flowlines$nhdplus_comid, ds_station_poi_ds_flowlines$DM_flowlines$nhdplus_comid)
+
+# download all data and create a geopackage with the comid list
+ds_station_poi_gpkg <- subset_nhdplus(comids= as.integer(all_comids),
+                            simplified = TRUE,
+                            overwrite = TRUE,
+                            output_file = paste0(here::here(), "/data/ds_station_poi_nhdplus.gpkg"),
+                            nhdplus_data = "download",
+                            return_data = FALSE)
+
+
+# check layers in database:
+st_layers(paste0(here::here(), "/data/ds_station_poi_nhdplus.gpkg"))
+
+# pull the flowlines back in
+ds_station_poi_streams <- read_sf(paste0(here::here(), "/data/ds_station_poi_nhdplus.gpkg"), "NHDFlowline_Network")
+
+# CB stations as spatial object
+cb_station_sf <- st_as_sf(cb_stations_manual, coords = c("long", "lat"), crs = 4326)
+
+# make a map
+prettymapr::prettymap({
+  rosm::osm.plot(project = FALSE, 
+                 bbox = matrix(st_bbox(ds_station_poi_streams), byrow = FALSE, ncol = 2,
+                               dimnames = list(c("x", "y"), c("min", "max"))), 
+                 type = "cartolight", quiet = TRUE, progress = "none")
+  plot(ds_station_poi_streams$geom, col = "steelblue", lwd = (ds_station_poi_streams$streamorde / 4), add=TRUE)
+  plot(ds_station_poi, add=TRUE, pch=21, bg="orange", cex=1.5)
+  prettymapr::addnortharrow()
+})
+
+m1 <- mapview(ds_station_poi, col.regions="black", cex=6, layer.name="Start Point") +
+  mapview(ds_station_poi_streams, zcol="slope", legend=TRUE, layer.name="Reach <br> Slope")
+  mapview(cb_station_sf, col.regions="orange", layer.name="conmon stations")
+
+m1
+
+# loop through each and use lat/long to get NHD flowline comid, then attach comid and nhd data to df
+cb_station_sf$comid <- c()
+rm(cb_station_nhd)
+
+for(i in 1:nrow(cb_station_sf)) {
+  
+
+    cb_station_name <- cb_station_sf$station[i]
+    print(paste('----', cb_station_name))
+    ## poi <- c(cb_station_sf$long[i], cb_station_sf$lat[i])
+  
+    # turn into spatial object
+    ## cb_station_i <- st_sfc(st_point(poi), crs = 4326)
+    cb_station_i <- cb_station_sf$geometry[i]
+
+
+    # now figure out the nearest stream segment ID to our point
+    hgsite_comid <- discover_nhdplus_id(cb_station_i)
+    print(hgsite_comid)
+    
+    # first make a list defining the sourcetype and ID
+    ## hgsite_list <- list(featureSource = "comid",
+    ##                   featureID = hgsite_comid)
+
+  if(!is.null(hgsite_comid)) {
+      cb_station_sf$comid[i] <- hgsite_comid
+      cb_station_i_nhd <- nhdplusTools::get_nhdplus(comid = hgsite_comid)
+    
+      if(!exists('cb_station_nhd')) {
+        cb_station_nhd <- cb_station_i_nhd
+      } else {
+        cb_station_nhd <- rbind(cb_station_nhd, cb_station_i_nhd)
+      }
+  } else {
+      cb_station_sf$comid[i] <- NA
+  }
+
+}
+
+
+# complete site dataframe
+## cb_station_data <- cb_station_sf %>%
+##   st_join(cb_station_nhd)
+
+# reproject all
+cb_station_proj <- st_transform(cb_station_sf, crs = 26910)
+cb_flowlines <- st_transform(ds_station_poi_streams, crs = 26910)
+
+# snap to streamline
+st_snap_points <- function(x, y, namevar, max_dist = 1000) {
+  
+  # this evaluates the length of the data
+  if (inherits(x, "sf")) n = nrow(x)
+  if (inherits(x, "sfc")) n = length(x)
+  
+  # this part: 
+  # 1. loops through every piece of data (every point)
+  # 2. snaps a point to the nearest line geometries
+  # 3. calculates the distance from point to line geometries
+  # 4. retains only the shortest distances and generates a point at that intersection
+  out = do.call(c,
+                lapply(seq(n), function(i) {
+                  nrst = st_nearest_points(st_geometry(x)[i], y)
+                  nrst_len = st_length(nrst)
+                  nrst_mn = which.min(nrst_len)
+                  if (as.vector(nrst_len[nrst_mn]) > max_dist) return(st_geometry(x)[i])
+                  return(st_cast(nrst[nrst_mn], "POINT")[2])
+                })
+  )
+  # this part converts the data to a dataframe and adds a named column of your choice
+  out_xy <- st_coordinates(out) %>% as.data.frame()
+  out_xy <- out_xy %>% 
+    mutate({{namevar}} := x[[namevar]]) %>% 
+    st_as_sf(coords=c("X","Y"), crs=st_crs(x), remove=FALSE)
+  
+  return(out_xy)
+}
+
+# now snap points to the lines using a 500 meter buffer, select which ID column you want keep for rejoining
+gages_snapped <- st_snap_points(cb_station_proj, 
+                                cb_flowlines,
+                                namevar = "station", 
+                                max_dist = 1000000)
+
+
+mapview(gages_snapped, col.regions="cyan", layer.name="Snapped Gages") +
+  mapview(cb_station_proj, col.regions="orange", layer.name="Unsnapped Gages") +
+  mapview(cb_flowlines, color="steelblue", layer.name="Flowlines")
+
+
+# create a 1 meter buffer around snapped point
+poi_snapped_buff <-  st_buffer(gages_snapped, 5)
+
+
+segs <- st_collection_extract(lwgeom::st_split(cb_flowlines, poi_snapped_buff), "LINESTRING") %>%
+  stplanr::line_breakup(st_buffer(gages_snapped, 2)) %>%
+  tibble::rownames_to_column(var = "rowid") %>% 
+  mutate(rowid=as.integer(rowid))
+
+mapview(segs)
+
+# filter, if desired
+segs_filt <- segs %>%
+  filter(
+      ## gnis_id != "1552968"
+    )
+
+mapview(segs_filt, zcol="gnis_name")  + 
+  # mapview(segs, color="blue", lwd=0.3) +
+  mapview(gages_snapped, col.regions="cyan", layer.name="Snapped Gages") 
+
+segs_filt_dist <- segs_filt %>% 
+  # drop the "loose ends" on either extent (upstream or downstream) of first/last gage
+  # filter(!rowid %in% c(232, 100, 66, 62, 63)) %>% 
+  mutate(seg_len_m = units::drop_units(units::set_units(st_length(.), "m")),
+         seg_len_km = seg_len_m/1000) %>% 
+  arrange(desc(hydroseq)) %>% 
+  mutate(total_len_km = cumsum(seg_len_km)) # %>% 
+  # filter to just cols of interest
+  # select(rowid, ogc_fid:comid, gnis_id:reachcode, streamorde, hydroseq, seg_len_km, total_len_km, geom)
+
+
+mapview(segs_filt_dist, zcol="total_len_km", layer.name="Cumulative Flowline<br> Distance (km)")  +
+  mapview(gages_snapped, layer.name="conmon stations") +
+  mapview(cb_station_proj, col.regions="orange", layer.name="Unsnapped Gages")
+  
+
+segs_on_points <- st_buffer(gages_snapped, 1) %>%
+  ## st_filter(st_buffer(gages_snapped, 1)) %>%
+  st_join(segs_filt_dist)
+
+
+# reproject all
+segs_xy <- st_transform(segs_on_points, crs = 4326) %>%
+  st_drop_geometry()
+
+
+cb_station_complete <- gages_snapped %>%
+  st_drop_geometry() %>%
+  left_join(segs_xy, by = 'station', suffix = c(".x", "")) %>%
+  select(-ends_with(".x"))
+
+googlesheets4::write_sheet(cb_station_complete,
+                 ss = "https://docs.google.com/spreadsheets/d/1RrHvZfj1uJv9rUkVST4lMzTiD6UWWNVmZwCIHBOpJuk/edit#gid=0",
+                           sheet = 'data_flowlines')
+
+```
+
+
+```{r}
+
+
+cb_station_complete <- googlesheets4::read_sheet(
+                 ss = "https://docs.google.com/spreadsheets/d/1RrHvZfj1uJv9rUkVST4lMzTiD6UWWNVmZwCIHBOpJuk/edit#gid=0",
+                           sheet = 'data_flowlines')
+
+cb_station_complete <- cb_station_complete %>%
+  left_join(cb_stations_manual, by = 'station')
+
+```
+
+Now we have VECOS, MDDNR conmon data -- and information ocmpiled about the stations. Next we merge into one dtaframe.
+
+```{r}
+
+
+conmon <- rbind(as.data.frame(conmon_eotb), conmon_vecos)
+
+conmon <- conmon %>%
+  filter(station %in% cb_station_complete$station) %>%
+  left_join(cb_station_complete, by = "station") %>%
+  # and arrange by latitude (roughly longitudinal laong flowpath)
+  arrange(total_len_km)
+
+conmon <- conmon %>%
+  rename(latitude = lat, longitude = long)
+```
+
+Now we have a combined dataset
+
+``` {r}
+
+# Here is a list of MDDNR and VECOS stations along the Potomac River
+stations <- c(
+# MDDNR
+"XDB4544",
+"XCD5599",
+"XFB0231",
+"XDA8236",
+"XEA3687",
+"XBE8396",
+"XFB2184",
+"XDC3807",
+"XDB8884",
+"XBF6843",
+"XBF7904",
+"XCC8346",
+"XCC9680",
+"XCF1440",
+# VECOS
+"POH002.10",
+"OCC002.47",
+"POM000.97",
+"MON000.18",
+"NOM002.36",
+"WES000.18"
+)
+
+# set years of interest
+years <- c(2007, 2008)
+
+getSeason <- function(DATES) {
+    WS <- as.Date("2012-12-15", format = "%Y-%m-%d") # Winter Solstice
+    SE <- as.Date("2012-3-15",  format = "%Y-%m-%d") # Spring Equinox
+    SS <- as.Date("2012-6-15",  format = "%Y-%m-%d") # Summer Solstice
+    FE <- as.Date("2012-9-15",  format = "%Y-%m-%d") # Fall Equinox
+
+    # Convert dates from any year to 2012 dates
+    d <- as.Date(strftime(DATES, format="2012-%m-%d"))
+
+    ifelse (d >= WS | d < SE, "Winter",
+      ifelse (d >= SE & d < SS, "Spring",
+        ifelse (d >= SS & d < FE, "Summer", "Fall")))
+}
+
+# time series with mean, model, and obs
+conmon.ts <- conmon %>%
+  filter(
+    station %in% stations,
+  ) %>%
+  mutate(
+         DateTime = as.POSIXct(date_time, format = "%Y-%m-%d %H:%M:%S"),
+         date = as.Date(DateTime, format = "%Y-%m-%d"),
+         dec_date = lubridate::decimal_date(as.Date(DateTime, format = "%Y-%m-%d")),
+         year = lubridate::year(date),
+         quarter = lubridate::quarter(date, fiscal_start = 1),
+         season = getSeason(date),
+         month = lubridate::month(date),
+         week = lubridate::week(date),
+         ## do_rollmean_1d = zoo::rollmean(do, 96, na.pad = TRUE),
+         do_modeled = (do*100) / do_sat,
+         do_mgl_from_eq = do - do_modeled,
+         depth_bucket = round(depth/ 0.5) * 0.5,
+         diel = solartime::getSolarTimeHour(timestamp = DateTime, longDeg = longitude),
+         daynight = solartime::computeIsDayByLocation(timestamp = DateTime,
+                                             latDeg = latitude,
+                                             longDeg = longitude),
+  ) %>%
+  filter(
+      year %in% years,
+  )
+
+
+
+conmon.ts.sum <- conmon.ts %>%
+  rename(do_mgl = do) %>%
+  group_by(station, year, season, month, date) %>%
+  filter(!is.na(do), !is.na(do_modeled)) %>%
+  summarize(
+    do_mgl_mean = mean(do_mgl),
+    do_mgl_range = range(do_mgl),
+    do_mgl_min = min(do_mgl),
+    do_mgl_max = max(do_mgl),
+    do_mgl_median = median(do_mgl),
+    do_time_min = date_time[which.min(do_mgl)],
+    do_time_eq_min = date_time[which.min(do_modeled)],
+    do_hour_min = as.numeric(lubridate::hour(do_time_min)),
+    do_hour_eq_min = as.numeric(lubridate::hour(do_time_eq_min)),
+    do_month_min = as.numeric(lubridate::month(do_time_min)),
+    do_diel_min = diel[which.min(do_mgl)],
+    do_diel_max = diel[which.max(do_mgl)],
+    do_hour_max = lubridate::hour(date_time[which.max(do_mgl)]),
+    depth_mean_rounded = round(mean(depth)/ 0.5) * 0.5,
+    potomac_river_km = max(total_len_km),
+    sp_cond_mean = mean(sp_cond),
+    sp_cond_at_do_min = sp_cond[which.min(do_mgl)],
+    )
+
+conmon.ts.sum <- conmon.ts.sum[order(conmon.ts.sum$potomac_river_km),]
+
+```
+
+We make our visualization
+
+```{r}
+
+# with measured DO data
+gg.conmon.sum <- ggplot(conmon.ts.sum,
+                aes(
+                  x = do_hour_min,
+                  y = 
+                             forcats::fct_rev(forcats::fct_reorder(as.factor(station),
+                                 signif(potomac_river_km, 3))),
+                  fill = stat(x)
+                  ))+
+  ggridges::geom_density_ridges_gradient() +
+  ## scale_x_continuous(limits = c(0, 24), breaks =0:24) +
+  scale_fill_viridis_c(name = "Hour (0-24)", option = "C") +
+  labs(title = 'Daily Minimum DO Timing', subtitle = "Potomac River Conmon, 2007-2008") +
+  ## scale_y_discrete(expand = c(0, 0)) +
+  ## xlim(0, 24) +
+  coord_cartesian(clip = "off") +
+  ggridges::theme_ridges(grid = FALSE, center_axis_labels = TRUE) +
+  labs( y = expression(atop(bold("Stations in Longitudinal Order"))),
+                       ## atop('Upstream to Downstream (river km from the Fall Line)')),
+    x = expression(bold("Hour of Daily Minimum DO (24-hour clock)"))) +
+  theme(
+    text = element_text(size = 50),
+    axis.text.y = element_text(size = 44),
+    axis.text.x = element_text(size = 44),
+    plot.title = element_text(size = 56)
+  )  +
+  facet_wrap(~season) +
+  ylab(expression(bold(""))) +
+  theme(legend.position = "none") 
+
+gg.conmon.sum
+
+
+# with equilibrium modelled DO data
+gg.conmon.sum <- ggplot(conmon.ts.sum,
+                aes(
+                  x = do_hour_eq_min,
+                  ## y = as.character(latitude),
+                  y = 
+                             forcats::fct_rev(forcats::fct_reorder(as.factor(station),
+                                 signif(potomac_river_km, 3))),
+                  fill = stat(x)
+                )) +
+  ggridges::geom_density_ridges_gradient() +
+  scale_fill_viridis_c(name = "Hour (0-24)", option = "C") +
+  labs(title = 'Daily Minimum DO Timing, Equilibrium Model', subtitle = "Potomac River Conmon, 2007-2008\nEquilibrium Model from Temp, Salinity, Pressure (Benson & Krause 1984)") +
+  ## scale_x_continuous(expand = c(0, 0)) +
+  ## scale_y_discrete(expand = c(0, 0)) +
+  coord_cartesian(clip = "off") +
+  ggridges::theme_ridges(grid = FALSE, center_axis_labels = TRUE) +
+  ylab(expression(bold(""))) +
+  xlab(expression(bold("Hour of Daily Minimum Equilibrium Model DO (24-hour clock)"))) +
+  theme(
+    text = element_text(size = 50),
+    axis.text.y = element_text(size = 44),
+    axis.text.x = element_text(size = 44),
+    plot.title = element_text(size = 56)
+  )  +
+  facet_wrap(~season) +
+  theme(legend.position = "none") 
+
+gg.conmon.sum
+
+
+# with  salinity
+gg.conmon.sum <- ggplot(conmon.ts.sum,
+                aes(
+                  x =  sp_cond_mean,
+                  y = as.character(latitude),
+                  fill = stat(x)
+                )) +
+  ggridges::geom_density_ridges_gradient() +
+  scale_fill_viridis_c(name = "Hour (0-24)", option = "C") +
+  labs(title = 'Daily Minimum DO Timing, Equilibrium Model', subtitle = "Potomac River Conmon, 2007-2008\nEquilibrium value from Sp_Cond, Salinity, Pressure (Benson and Krause 1984)") +
+  ## scale_x_continuous(expand = c(0, 0)) +
+  ## scale_y_discrete(expand = c(0, 0)) +
+  coord_cartesian(clip = "off") +
+  ggridges::theme_ridges(grid = FALSE, center_axis_labels = TRUE) +
+  ylab(expression(bold("Latitude of Station"))) +
+  xlab(expression(bold("Hour of Daily Minimum Equilibrium Model DO (24-hour clock)"))) +
+  theme(
+    text = element_text(size = 50),
+    axis.text.y = element_text(size = 44),
+    axis.text.x = element_text(size = 44),
+    plot.title = element_text(size = 56)
+  )  +
+  ## xlim(0, 20) +
+  ## facet_wrap(~season) +
+  theme(legend.position = "bottom") 
+
+gg.conmon.sum
+
+gg.conmon.sum <- ggplot(conmon.ts.sum,
+                aes(
+                  x =  sp_cond_at_do_min,
+                  y = as.character(latitude),
+                  fill = stat(x)
+                )) +
+  ggridges::geom_density_ridges_gradient() +
+  scale_fill_viridis_c(name = "Hour (0-24)", option = "C") +
+  labs(title = 'Daily Minimum DO Timing, Equilibrium Model', subtitle = "Potomac River Conmon, 2007-2008\nEquilibrium value from Sp_Cond, Salinity, Pressure (Benson and Krause 1984)") +
+  ## scale_x_continuous(expand = c(0, 0)) +
+  ## scale_y_discrete(expand = c(0, 0)) +
+  coord_cartesian(clip = "off") +
+  ggridges::theme_ridges(grid = FALSE, center_axis_labels = TRUE) +
+  ylab(expression(bold("Latitude of Station"))) +
+  xlab(expression(bold("Hour of Daily Minimum Equilibrium Model DO (24-hour clock)"))) +
+  theme(
+    text = element_text(size = 50),
+    axis.text.y = element_text(size = 44),
+    axis.text.x = element_text(size = 44),
+    plot.title = element_text(size = 56)
+  )  +
+  ## facet_wrap(~season) +
+  ## xlim(0, 20) +
+  theme(legend.position = "bottom") 
+
+gg.conmon.sum
+
+## DIEL solar hour
+# with measured DO data
+gg.conmon.sum <- ggplot(conmon.ts.sum,
+                aes(
+                  x = do_diel_min,
+                  y = 
+                             forcats::fct_rev(forcats::fct_reorder(as.factor(station),
+                                 signif(potomac_river_km, 3))),
+                  fill = stat(x)
+                  ))+
+  ggridges::geom_density_ridges_gradient() +
+  ## scale_x_continuous(limits = c(0, 24), breaks =0:24) +
+  scale_fill_viridis_c(name = "Hour (0-24)", option = "C") +
+  labs(title = 'Daily Minimum DO Solar Timing', subtitle = "Potomac River Conmon, 2007-2008") +
+  ## scale_y_discrete(expand = c(0, 0)) +
+  ## xlim(0, 24) +
+  coord_cartesian(clip = "off") +
+  ggridges::theme_ridges(grid = FALSE, center_axis_labels = TRUE) +
+  labs( y = expression(atop(bold("Stations in Longitudinal Order"))),
+                       ## atop('Upstream to Downstream (river km from the Fall Line)')),
+    x = expression(bold("Solar Hour of Daily Minimum DO (Solar Time)"))) +
+  theme(
+    text = element_text(size = 50),
+    axis.text.y = element_text(size = 44),
+    axis.text.x = element_text(size = 44),
+    plot.title = element_text(size = 56)
+  )  +
+  facet_wrap(~season) +
+  ylab(expression(bold(""))) +
+  theme(legend.position = "none") 
+
+gg.conmon.sum
+
+
+gg.conmon.sum <- ggplot(conmon.ts.sum,
+                aes(
+                  x = do_diel_max,
+                  y = 
+                             forcats::fct_rev(forcats::fct_reorder(as.factor(station),
+                                 signif(potomac_river_km, 3))),
+                  fill = stat(x)
+                  ))+
+  ggridges::geom_density_ridges_gradient() +
+  ## scale_x_continuous(limits = c(0, 24), breaks =0:24) +
+  scale_fill_viridis_c(name = "Hour (0-24)", option = "C") +
+  labs(title = 'Daily Maximum DO Solar Timing', subtitle = "Potomac River Conmon, 2007-2008") +
+  ## scale_y_discrete(expand = c(0, 0)) +
+  ## xlim(0, 24) +
+  coord_cartesian(clip = "off") +
+  ggridges::theme_ridges(grid = FALSE, center_axis_labels = TRUE) +
+  labs( y = expression(atop(bold("Stations in Longitudinal Order"))),
+                       ## atop('Upstream to Downstream (river km from the Fall Line)')),
+    x = expression(bold("Solar Hour of Daily Maximum DO (Solar Time)"))) +
+  theme(
+    text = element_text(size = 50),
+    axis.text.y = element_text(size = 44),
+    axis.text.x = element_text(size = 44),
+    plot.title = element_text(size = 56)
+  )  +
+  facet_wrap(~season) +
+  ylab(expression(bold(""))) +
+  theme(legend.position = "none") 
+
+gg.conmon.sum
+
+```
+
+
+Equilibirum simple show plot
+
+```{r} 
+
+conmon.ts.long <- conmon.ts %>%
+  tidyr::pivot_longer(cols = c(do, do_modeled), values_to = "do_mgl", names_to = "data_type") %>%
+  arrange(latitude)
+
+
+gg.conmon.eq.boxplot <- ggplot(conmon.ts.long,
+                aes(
+                  x = data_type,
+                  y = do_mgl,
+                  fill = data_type
+                )) +
+        geom_boxplot(outlier.colour="black", outlier.shape=16,
+             outlier.size=2, notch=FALSE) +
+  theme_bw() +
+  scale_fill_brewer(palette = "Pastel1") +
+  ## scale_fill_manual(values = c("#2a3444", "#ffb70c")) +
+  ## scale_fill_manual(values = c("#2a3444", "#456547")) +
+  ## scale_color_brewer(palette="Spectral") +
+  ## scale_color_gradient(low="blue", high="red") +
+  ## facet_wrap(~season) +
+  xlab("") +
+  ylab("Dissolved Oxygen (mg/L)\n") +
+  ggtitle("DO Observed and Process Model Predictions",
+          subtitle = "MDDNR EOTB and VECOS Conmon 2007-2008\n") +
+  ylim(2.5, 15.5) +
+  theme(
+    text = element_text(size = 50),
+    axis.text.y = element_text(size = 54),
+    axis.text.x = element_text(size = 54),
+    plot.title = element_text(size = 56)
+        ) +
+  stat_summary(fun = mean, color = "darkgray", position = position_dodge(0.75),
+             geom = "point", shape = 18, size = 4,
+             show.legend = FALSE)
+
+gg.conmon.eq.boxplot
+
+```
+
+```{r}
+
+library(ggpmisc)
+pal <- wesanderson::wes_palette("Zissou1", 10, type = "continuous")
+
+
+subset_stations <- c("POH002.10", "WES000.18", "POM000.97", "MON000.18")
+
+conmon.poh <- conmon %>%
+  filter(
+    station %in% subset_stations,
+    ) %>%
+  mutate(
+         DateTime = as.POSIXct(date_time, format = "%Y-%m-%d %H:%M:%S", tz = "America/New_York"),
+         DateTime_UTC = format(date_time, tz = "UTC", usetz = TRUE),
+         date = as.Date(DateTime, format = "%Y-%m-%d"),
+         dec_date = lubridate::decimal_date(as.Date(DateTime, format = "%Y-%m-%d")),
+         year = lubridate::year(date),
+         quarter = lubridate::quarter(date, fiscal_start = 1),
+         month = lubridate::month(date),
+         week = lubridate::week(date),
+         do_rollmean30 = zoo::rollmean(do, 30, na.pad = TRUE),
+         do_modeled = (do*100) / do_sat,
+         depth_bucket = round(depth/ 0.5) * 0.5,
+         fraction_hour = solartime::getFractionalHours(DateTime),
+         sunrise_time = solartime::computeSunriseHour(timestamp = DateTime, longDeg = longitude, latDeg = latitude),
+         sunset_time = solartime::computeSunsetHour(timestamp = DateTime, longDeg = longitude, latDeg = latitude),
+         diel = solartime::getSolarTimeHour(timestamp = DateTime, longDeg = longitude),
+         daynight = solartime::computeIsDayByLocation(timestamp = DateTime,
+                                             latDeg = latitude,
+                                             longDeg = longitude),
+  ) %>%
+  filter(
+    year %in% years[1],
+  )
+
+source('./mike_atm.R')
+source('../R/mike_atm.R')
+library(unitted)
+
+rm(conmon.noaa.df)
+
+for(s in subset_stations) {
+
+  target_data <- conmon.poh[conmon.poh$station == s,]
+
+  lat <- target_data$latitude
+  long <- target_data$longitude
+  station <- unique(target_data$station)
+
+  dtSt = min(target_data$date)
+  dtEnd = max(target_data$date)
+  
+  print(paste('NOAA query for', station, '       \n', '   ', dtSt, 'to', dtEnd))
+  
+  conmon_NOAA <- FindandCollect_NOAA(lat = unique(lat),
+                                     long = unique(long),
+                                     start_datetime = dtSt,
+                                     end_datetime = dtEnd)
+  
+  conmon.noaa <- conmon_NOAA %>%
+    mutate(
+      DateTime_UTC = format(DateTime_UTC, tz = "UTC", usetz = TRUE),
+      station = station,
+    )
+
+  if(!exists("conmon.noaa.df")) {
+    conmon.noaa.df <- conmon.noaa
+  } else {
+    conmon.noaa.df <- rbind(conmon.noaa.df, conmon.noaa)
+  }
+}
+
+
+conmon.poh.noaa <- conmon.poh %>%
+    left_join(conmon.noaa.df, by = c("station", "DateTime_UTC")) %>%
+    mutate(
+        do_modeled = (do*100) / do_sat,
+        do_mgl_from_eq = do - do_modeled
+    )
+
+
+
+## cmn.month <- conmon.poh.noaa[conmon.poh.noaa$month == 8 & !is.na(conmon.poh.noaa$do_mgl_from_eq),]
+
+cmn.month <- conmon.poh.noaa[!is.na(conmon.poh.noaa$do_mgl_from_eq),] %>%
+  mutate(
+    day_night = case_when(daynight ~ "day", .default = "night")
+  )
+
+conmon.x = cmn.month$diel
+conmon.y = cmn.month$do_mgl_from_eq
+
+## lmfit <- lm(conmon.y~sin(2*pi*conmon.x/366) + cos(2*pi*conmon.x/366))
+lmfit <- lm(conmon.y~sin(conmon.x))
+b0 <- coef(lmfit)[1]
+alpha <- coef(lmfit)[2]
+beta <- coef(lmfit)[3]
+
+ssp <- spectrum(conmon.y)
+per <- 1/ssp$freq[ssp$spec==max(ssp$spec)]
+reslm <- lm(conmon.y ~ sin(2*pi/per*conmon.x)+cos(2*pi/per*conmon.x))
+summary(reslm)
+
+rg <- diff(range(conmon.y))
+plot(conmon.y ~ conmon.x, ylim=c(min(conmon.y)-0.1*rg, max(conmon.y)+0.1*rg))
+## lines(fitted(reslm)~conmon.x,col=4,lty=2)   # dashed blue line is sin fit
+
+# including 2nd harmonic reallconmon.y improves the fit
+reslm2 <- lm(conmon.y ~ sin(2*pi/per*conmon.x)+cos(2*pi/per*conmon.x)+sin(4*pi/per*conmon.x)+cos(4*pi/per*conmon.x))
+summary(reslm2)
+lines(fitted(reslm2)~conmon.x,col=3)    # solid green line is periodic with second harmonic
+
+cmn.month$act <- predict(reslm2, newdata=cmn.month)
+
+## ggplot(conmon.poh.noaa, aes(diel, act))+
+##   geom_point(alpha=0.2) +
+##   geom_line(data=conmon.poh.noaa,colour="red")
+
+
+pal <- wesanderson::wes_palette("Zissou1", 10, type = "continuous")
+
+## pal <- wesanderson::wes_palette("Zissou1", 2, type = "discrete")
+
+library(ggpmisc)
+
+
+cmn.poh.sum <- cmn.month %>%
+  rename(do_mgl = do) %>%
+  mutate(season = getSeason(date_time)) %>%
+  group_by(station, year, season, month, date) %>%
+  filter(!is.na(do), !is.na(do_modeled)) %>%
+  summarize(
+    do_mgl_mean = mean(do_mgl),
+    do_mgl_range = range(do_mgl),
+    do_mgl_min = min(do_mgl),
+    do_mgl_max = max(do_mgl),
+    do_mgl_median = median(do_mgl),
+    do_time_min = date_time[which.min(do_mgl)],
+    do_time_eq_min = date_time[which.min(do_modeled)],
+    do_hour_min = as.numeric(lubridate::hour(do_time_min)),
+    do_mgl_from_eq_min = min(do_mgl_from_eq),
+    do_mgl_from_eq_max = max(do_mgl_from_eq),
+    do_hour_eq_min = as.numeric(lubridate::hour(do_time_eq_min)),
+    do_month_min = as.numeric(lubridate::month(do_time_min)),
+    do_diel_min = diel[which.min(do_mgl)],
+    do_diel_max = diel[which.max(do_mgl)],
+    do_hour_max = lubridate::hour(date_time[which.max(do_mgl)]),
+    depth_mean_rounded = round(mean(depth)/ 0.5) * 0.5,
+    potomac_river_km = max(total_len_km),
+    sp_cond_mean = mean(sp_cond),
+    sp_cond_range = range(sp_cond),
+    sp_cond_at_do_min = sp_cond[which.min(do_mgl)],
+    temp_mean = mean(temp),
+    temp_range = range(temp),
+    air_temp_mean = mean(air_temp),
+    air_temp_range = range(air_temp),
+    skycover_mean = mean(skycover),
+    skycover_range = range(skycover),
+    dewtemp_mean = mean(dewtemp),
+    dewtemp_range = range(dewtemp),
+    windspeed_mean = mean(windspeed),
+    windspeed_range = range(windspeed),
+    ## act_mean = mean(act),
+    sunrise_do = do_mgl[which.min(abs(fraction_hour - sunrise_time))],
+    sunset_do = do_mgl[which.min(abs(fraction_hour - sunset_time))],
+    do_diel_production = sum(do_mgl[which(day_night == 'day')] - sunrise_do),
+    do_diel_respiration = sum(do_mgl[which(day_night == 'night')] - sunset_do),
+    sunrise_do_mgl_from_eq = do_mgl_from_eq[which.min(abs(fraction_hour - sunrise_time))],
+    sunset_do_mgl_from_eq = do_mgl_from_eq[which.min(abs(fraction_hour - sunset_time))],
+    do_mgl_from_eq_diel_production = sum(do_mgl_from_eq[which(day_night == 'day')] - sunrise_do_mgl_from_eq),
+    do_mgl_from_eq_diel_respiration = sum(do_mgl_from_eq[which(day_night == 'night')] - sunset_do_mgl_from_eq),
+    air_wtr_mean = mean(air_temp/temp)
+    )
+
+cmn.poh.sum <- cmn.poh.sum[order(cmn.poh.sum$potomac_river_km),]
+
+
+gg.conmon.regs <- ggplot(cmn.poh.sum,
+## gg.conmon <- ggplot(conmon.ts[conmon.ts$year == 2022,],
+                aes(
+                  x = do_mgl_from_eq_max,
+                  y = do_mgl_from_eq_min,
+                  col = (windspeed_mean)
+                )) +
+  geom_point() +
+  ## geom_line(aes(diel, act)) +
+  ## scale_color_discrete(colours = pal) +
+  scale_color_gradientn(colours = pal) +
+  ## stat_poly_line(formula = y ~ sin(2*pi/per*x)+cos(2*pi/per*x)+sin(4*pi/per*x)+cos(4*pi/per*x)) +
+  stat_poly_line() +
+  stat_poly_eq(use_label(c("eq", "R2", "p"), sep = "*\"; \"*"),
+                     size = 10,
+                     ## label.y = 0.75,
+                     ) +
+  theme_bw() +
+  theme(
+    text = element_text(size = 36),
+    axis.text.y = element_text(size = 22),
+    plot.title = element_text(size = 36)
+  ) +
+  facet_wrap(~station + month) +
+  geom_hline(yintercept = 0, col = 'black', size = 0.75)
+
+gg.conmon.regs
+
+gg.conmon.regs <- ggplot(cmn.poh.sum,
+## gg.conmon <- ggplot(conmon.ts[conmon.ts$year == 2022,],
+                aes(
+                  x = do_mgl_max,
+                  y = do_mgl_min,
+                  col = temp_mean/air_temp_mean
+                )) +
+  geom_point() +
+  ## geom_line(aes(diel, act)) +
+  ## scale_color_discrete(colours = pal) +
+  scale_color_gradientn(colours = pal) +
+  ## stat_poly_line(formula = y ~ sin(2*pi/per*x)+cos(2*pi/per*x)+sin(4*pi/per*x)+cos(4*pi/per*x)) +
+  stat_poly_line() +
+  stat_poly_eq(use_label(c("eq", "R2", "p"), sep = "*\"; \"*"),
+                     size = 10,
+                     ## label.y = 0.75,
+                     ) +
+  theme_bw() +
+  theme(
+    text = element_text(size = 36),
+    axis.text.y = element_text(size = 22),
+    plot.title = element_text(size = 36)
+  ) +
+  facet_wrap(~station + month) +
+  geom_hline(yintercept = 0, col = 'black', size = 0.75)
+
+gg.conmon.regs
+
+gg.conmon.noaa <- ggplot(cmn.poh.sum,
+## gg.conmon <- ggplot(conmon.ts[conmon.ts$year == 2022,],
+                aes(
+                  x = do_diel_production,
+                  y = do_diel_respiration,
+                  col = skycover_mean
+                )) +
+  geom_point() +
+  scale_color_gradientn(colours = pal, name = 'skycover\n') +
+  stat_poly_line() +
+  stat_poly_eq(use_label(c("eq", "R2", "p"), sep = "*\"; \"*"),
+                     size = 10,
+                     ## label.y = 0.75,
+                     ) +
+  theme_bw() +
+  theme(
+    text = element_text(size = 46),
+    axis.text.y = element_text(size = 52),
+    plot.title = element_text(size = 56)
+  ) +
+  ## ylim(-2.75,7.5) +
+  facet_wrap(~month+station) +
+  ggtitle(paste0("Air Temp (C) vs DO (mg/L from eq.) at ", station),
+          subtitle = paste0('colored by nearest NOAA gage skycover data')) +
+  geom_hline(yintercept = 0, col = 'black', size = 0.75)
+
+gg.conmon.noaa
+
+
+gg.conmon.noaa <- ggplot(cmn.poh.sum
+                ) +
+  geom_point(
+                aes(
+                  x = do_mgl_from_eq_diel_production,
+                  y = do_mgl_from_eq_diel_respiration,
+                  col = dewtemp_mean
+                )
+  )
+
++
+  scale_color_gradientn(colours = pal)+ #, name = '\n') +
+  stat_poly_line() +
+  stat_poly_eq(use_label(c("eq", "R2", "p"), sep = "*\"; \"*"),
+                     size = 10,
+                     ## label.y = 0.75,
+                     ) +
+  theme_bw() +
+  theme(
+    text = element_text(size = 46),
+    axis.text.y = element_text(size = 52),
+    plot.title = element_text(size = 56)
+  ) +
+  ## ylim(-2.75,7.5) +
+  ## scale_x_log10() +
+  ## facet_wrap(~season+station) +
+  ggtitle(paste0("Sunrise-Sunset DO Production (eq-subtracted mgl) vs Sunset-Sunrise DO Consumption (eq-subtracted mgl) at ", station),
+          subtitle = paste0('colored by nearest NOAA gage weather data')) +
+  geom_hline(yintercept = 0, col = 'black', size = 0.75)
+
+gg.conmon.noaa
+
+library(plotly)
+
+plotly::ggplotly(gg.conmon.noaa)
+
+```

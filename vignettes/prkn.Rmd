@@ -20,6 +20,7 @@ library(dplyr)
 library(googlesheets4)
 library(ggplot2)
 library(corrplot)
+library(GGally)
 
 cmc.prkn <- read.csv('data/PRKN_2023_plus.csv')
 
@@ -30,7 +31,8 @@ cmc.prkn.f <- cmc.prkn %>%
     site_code = stringr::str_replace(
                            stringr::str_extract(cmc.prkn$StationName, '([^-]+)(?:-)[0-9]{1,2}'),
                            " |-", ""),
-    datetime = paste(Date, Time),
+    datetime = format(strptime(paste0(Date, Time), "%m/%d/%Y"), "%Y-%m-%d %H:%M:%S"),
+    date = lubridate::date(datetime),
     air_temp = Air.temperature..AT.1.,
     latitude = Latitude,
     longitude = Longitude,
@@ -41,7 +43,7 @@ cmc.prkn.f <- cmc.prkn %>%
   ) %>%
   select(
     site_code,
-    date = Date,
+    date,
     time = Time,
     datetime,
     air_temp,
@@ -55,6 +57,8 @@ cmc.prkn.f <- cmc.prkn %>%
 
 
 head(cmc.prkn.f)
+
+## write.csv(cmc.prkn.f, 'cmc_prkn_202309XX_munged.csv')
 
 umd.lab <- googlesheets4::read_sheet(ss = "https://docs.google.com/spreadsheets/d/17CMguyAioEv3_qEkUUXe67UbBmJ6ACnNxCKu3W2kmx0/edit#gid=0",
                                      sheet = "data")
@@ -160,5 +164,107 @@ wq.pr.corrplot.after <- corrplot(wq.pr.corr.after,
          insig = 'label_sig',
          pch.col = 'grey20',
          order = 'AOE')
+
+
+```
+
+Now, it might be interesting to make a pair plot to look at the regressions between variables
+
+```{r}
+
+# Let's revisit - which relationships were singificant?
+# all, before, after
+testRes = cor.mtest(wq.pr.corr.df, conf.level = 0.95)
+wq.pr.corrplot <- corrplot(wq.pr.corr,
+         title = "\nSeptember PRKN, Before and After Storm",
+         p.mat = testRes$p,
+         method = 'color',
+         diag = FALSE,
+         type = 'upper',
+         sig.level = c(0.001, 0.01, 0.05),
+         pch.cex = 0.9,
+         insig = 'blank',
+         pch.col = 'grey20',
+         order = 'AOE')
+
+
+```
+
+Seems like some of the most singificant variables (edited to some degree for ions of relatively known activity)
+
+```{r}
+
+element_cols <- c(
+  "longitude",
+  "water_temp",
+  "turbidity",
+  "ecoli",
+  "ecoli_ln",
+  "pH",
+  "a254",
+  "S_275_295",
+  "Slope Ratio",
+  "BIX",
+  "HIX",
+  "P/H",
+  "Humic-like",
+  "Al mg/L",
+  "Ca mg/L",
+  "B mg/L",
+  "Fe mg/L",
+  "K mg/L",
+  "Mg mg/L",
+  "Na mg/L",
+  "S mg/L",
+  "Sr mg/L",
+  "Cu mg/L",
+  "Be mg/L",
+  "Ag mg/L",
+  "U mg/L",
+  "Zn mg/L",
+  "P mg/L"
+)
+
+names.use <- names(wq.pr.corr.df)[(names(wq.pr.corr.df) %in% element_cols)]
+wq.pr.pair.df <- wq.pr.corr.df[, names.use]
+
+
+names.use <- names(wq.pr.corr.before.df)[(names(wq.pr.corr.before.df) %in% element_cols)]
+wq.pr.pair.df <- wq.pr.corr.before.df[, names.use]
+
+
+names.use <- names(wq.pr.corr.after.df)[(names(wq.pr.corr.after.df) %in% element_cols)]
+wq.pr.pair.df <- wq.pr.corr.after.df[, names.use]
+
+```
+
+```{r}
+
+
+GGally::ggpairs(data = wq.pr.pair.df,
+        ## columns = c('column name 1', 'column name 2', 'column name 3'),
+        title = 'Pairs Plot')
+
+element.gg <- ggplot(wq.pr.pair.df, aes(x = ecoli_ln, y = `S_275_295` #,
+                                        ## col = `Humic-like`
+                                        )) +
+                  geom_point(
+                      ## aes(x = `S mg/L`, y = `Sr mg/L`, col = `Humic-like`)
+                  ) +
+  ## scale_x_log10() +
+  ## scale_y_log10() +
+  theme_minimal() +
+  ggpmisc::stat_poly_line() +
+  ggpmisc::stat_poly_eq(ggpmisc::use_label(c("eq", "R2")), size = 10, label.x = 0.8) +
+  ggtitle(paste('ecoli (ln of MPU) vs Organic Matter S_275_295, Potomac River Septemeber 2023, Before Storm'),
+          subtitle = paste("Before and After Tropical Strom, Colored by Humic-like OM")) +
+  ## viridis::scale_color_viridis() +
+  theme_minimal() +
+  theme(
+    text = element_text(size = 26)
+  )
+  
+
+plotly::ggplotly(element.gg)
 
 ```
