@@ -116,4 +116,121 @@ collection <- ee$
 
 ```{r}
 
+#Install the devtools package if you do not already have it   
+install.packages("devtools")
+
+#Use the devtools packge to install StreamLightUtils
+devtools::install_github("psavoy/StreamLightUtils")
+devtools::install_github("psavoy/StreamLight")
+
+library("StreamLightUtils")
+library("StreamLight")
+
+#Set the download location (add your own directory)
+  working_dir <- file.path(getwd(), 'data/NLDAS/')
+
+# Check out jsut one single station
+head(cb_station_complete)
+station_id = "XCE0055"
+
+cb_xce0055 <- cb_station_complete %>%
+  dplyr::filter(station == station_id)
+
+cb_lat = cb_xce0055$lat
+cb_long = cb_xce0055$long
+
+head(cb_lat)
+
+#Download NLDAS data at station
+NLDAS_DL(
+    save_dir = working_dir,
+    Site_ID = station_id,
+    Lat = cb_lat, 
+    Lon = cb_long, 
+    startDate = "2007-01-01"
+)
+  
+#Process the downloaded data
+NLDAS_processed <- NLDAS_proc(
+    read_dir = working_dir, 
+    Site_IDs = station_id
+  )
+
+## Bulk
+
+# make cb station into a table of format
+# Site_ID, Lat, Lon, startDate
+
+site_basic <- cb_station_complete %>%
+  dplyr::mutate(
+    Site_ID = station,
+    Lat = lat,
+    Lon = long,
+    startDate = "2007-01-01"
+  ) %>%
+  dplyr::filter(!is.na(station),
+                !is.na(Lat),
+                !is.na(Lon),
+                !is.na(startDate)) %>%
+  dplyr::select(Site_ID, Lat, Lon, startDate)
+
+# check that it looks normal
+head(site_basic)
+
+#Read in a table with initial site information
+sites <- site_basic
+
+#Download NLDAS data at NC_NHC
+NLDAS_DL_bulk(
+    save_dir = working_dir,
+    site_locs = sites
+  )
+
+#List of successfully downloaded sites
+NLDAS_list <- stringr::str_sub(list.files(working_dir), 1, -11)
+
+sites <- sites %>%
+  dplyr::filter(!Site_ID %in% NLDAS_list)
+
+nrow(sites)
+
+# Download NLDAS data at NC_NHC
+NLDAS_DL_bulk(
+     save_dir = working_dir,
+     site_locs = sites
+   )
+
+# loop thru stragglers?
+## sites <- sites %>%
+  ## dplyr::filter(Site_ID == 'NOM002.36')
+
+for(s in 1:nrow(sites)) {
+  
+ station_id = sites$Site_ID[s]
+ cb_lat = sites$Lat[s]
+ cb_Lon = sites$Lon[s]
+
+ print(paste0("--------------- attempt", station_id))
+ #Download NLDAS data at station
+ NLDAS_DL(
+     save_dir = working_dir,
+     Site_ID = station_id,
+     Lat = cb_lat,
+     Lon = cb_long,
+     startDate = "2007-01-01"
+ )
+
+ print(paste0("-                   -"))
+}
+
+#Processing the downloaded NLDAS data
+NLDAS_processed <- StreamLightUtils::NLDAS_proc(read_dir = working_dir, NLDAS_list)
+
+for(i in 1:length(NLDAS_processed)) {
+  site = names(NLDAS_processed)[i]
+  fn = file.path(getwd(), 'NLDAS_csv', paste0(site, '.csv'))
+  
+  write.csv(NLDAS_processed[[i]], fn)
+}
+
 ```
