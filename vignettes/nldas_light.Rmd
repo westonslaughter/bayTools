@@ -1,0 +1,119 @@
+---
+title: "nldas_light"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{nldas_light}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+```{r setup}
+
+library(bayTools)
+library(rgee)
+library(sf)
+library(dplyr)
+
+
+cb_station_complete <- googlesheets4::read_sheet(
+                 ss = "https://docs.google.com/spreadsheets/d/1RrHvZfj1uJv9rUkVST4lMzTiD6UWWNVmZwCIHBOpJuk/edit#gid=0",
+                           sheet = 'data_flowlines')
+
+
+cb_stations_manual.r <- googlesheets4::read_sheet(ss = "https://docs.google.com/spreadsheets/d/1RrHvZfj1uJv9rUkVST4lMzTiD6UWWNVmZwCIHBOpJuk/edit#gid=0"
+                                                )
+
+cb_stations_manual <- cb_stations_manual.r %>%
+  filter(!is.na(site_code)) %>%
+  ## filter(start_year < 2009, end_year > 2007) %>%
+  rename(station = site_code) 
+
+cb_station_complete <- cb_station_complete %>%
+  left_join(cb_stations_manual, by = 'station')
+
+
+# CB stations as spatial object
+cb_station_sf <- st_as_sf(cb_stations_manual, coords = c("long", "lat"), crs = 4326)
+
+
+```
+
+Connect to gee
+
+```{r}
+
+
+# Set your Python ENV
+Sys.setenv("RETICULATE_PYTHON" = "/usr/bin/python3")
+
+# Set Google Cloud SDK. Only need it the first time you log in. 
+Sys.setenv("EARTHENGINE_GCLOUD" = "home/csaybar/google-cloud-sdk/bin/")
+ee_Authenticate()
+
+# Get the username
+HOME <- Sys.getenv("HOME")
+
+# 1. Install miniconda
+## reticulate::install_miniconda()
+
+# 2. Install Google Cloud SDK
+system("curl -sSL https://sdk.cloud.google.com | bash")
+
+# 3 Set global parameters
+Sys.setenv("RETICULATE_PYTHON" = sprintf("%s/.local/share/r-miniconda/bin/python3", HOME))
+Sys.setenv("EARTHENGINE_GCLOUD" = sprintf("%s/google-cloud-sdk/bin/", HOME))
+
+# 4 Install rgee Python dependencies
+ee_install()
+
+# 5. Authenticate and init your EE session
+ee_Initialize(drive = TRUE, display = TRUE)
+
+library(rgee)
+ee_Initialize()
+
+
+ee_install_upgrade()
+
+
+db <- 'CGIAR/SRTM90_V4'
+image <- ee$Image(db)
+image$bandNames()$getInfo()
+#> [1] "elevation"
+
+nc <- cb_station_sf
+
+# NLDAS draft
+collection <- ee$
+  ImageCollection('NASA/NLDAS/FORA0125_H002') %>%
+  ee$ImageCollection$filterDate("2007-06-01", "2007-09-01") %>%
+  ee$ImageCollection$map(function(x) x$select("temperature")) %>% # Select only precipitation bands
+  ee$ImageCollection$toBands() # from imagecollection to image
+
+nc_station <- nc %>%
+  filter(station == "XCE0055")
+
+ee_nc_nldas <- ee_extract(x = collection, y = nc_station, sf = TRUE)
+
+for(i in ee_nc_nldas)
+
+# NLDAS draft
+collection <- ee$
+  ImageCollection('NASA/NLDAS/FORA0125_H002') %>%
+  ee$ImageCollection$filterDate("2007-06-01", "2007-09-01") %>%
+  ## ee$ImageCollection$map(function(x) x$select("temperature")) %>% # Select only precipitation bands
+  ee$ImageCollection$toBands() # from imagecollection to image
+
+```
+
+
+```{r}
+
+```

@@ -376,10 +376,12 @@ conmon.ts.sum <- conmon.ts %>%
   group_by(station, year, season, month, date) %>%
   filter(!is.na(do), !is.na(do_modeled)) %>%
   summarize(
+    sunrise_time = solartime::computeSunriseHour(timestamp = DateTime, longDeg = longitude, latDeg = latitude),
+    sunset_time = solartime::computeSunsetHour(timestamp = DateTime, longDeg = longitude, latDeg = latitude),
     do_mgl_mean = mean(do_mgl),
-    do_mgl_range = range(do_mgl),
     do_mgl_min = min(do_mgl),
     do_mgl_max = max(do_mgl),
+    do_mgl_range = do_mgl_max - do_mgl_min,
     do_mgl_median = median(do_mgl),
     do_time_min = date_time[which.min(do_mgl)],
     do_time_eq_min = date_time[which.min(do_modeled)],
@@ -388,11 +390,16 @@ conmon.ts.sum <- conmon.ts %>%
     do_month_min = as.numeric(lubridate::month(do_time_min)),
     do_diel_min = diel[which.min(do_mgl)],
     do_diel_max = diel[which.max(do_mgl)],
+    do_solar_hour_min = floor(diel[which.min(do_mgl)]),
+    do_solar_hour_max = floor(diel[which.max(do_mgl)]),
     do_hour_max = lubridate::hour(date_time[which.max(do_mgl)]),
     depth_mean_rounded = round(mean(depth)/ 0.5) * 0.5,
     potomac_river_km = max(total_len_km),
     sp_cond_mean = mean(sp_cond),
     sp_cond_at_do_min = sp_cond[which.min(do_mgl)],
+    do_time_min_class = case_when(between(do_hour_min, 4, 8) ~ "morning minima",
+                                  between(do_hour_min, 18, 22) ~ "evening minima",
+                                  .default = "other")
     )
 
 conmon.ts.sum <- conmon.ts.sum[order(conmon.ts.sum$potomac_river_km),]
@@ -471,18 +478,20 @@ gg.conmon.sum
 gg.conmon.sum <- ggplot(conmon.ts.sum,
                 aes(
                   x =  sp_cond_mean,
-                  y = as.character(latitude),
+                  y = 
+                             forcats::fct_rev(forcats::fct_reorder(as.factor(station),
+                                 signif(potomac_river_km, 3))),
                   fill = stat(x)
                 )) +
   ggridges::geom_density_ridges_gradient() +
   scale_fill_viridis_c(name = "Hour (0-24)", option = "C") +
-  labs(title = 'Daily Minimum DO Timing, Equilibrium Model', subtitle = "Potomac River Conmon, 2007-2008\nEquilibrium value from Sp_Cond, Salinity, Pressure (Benson and Krause 1984)") +
+  labs(title = 'Daily Mean Specific Conductivity', subtitle = "Potomac River Conmon, 2007-2008") +
   ## scale_x_continuous(expand = c(0, 0)) +
   ## scale_y_discrete(expand = c(0, 0)) +
   coord_cartesian(clip = "off") +
   ggridges::theme_ridges(grid = FALSE, center_axis_labels = TRUE) +
   ylab(expression(bold("Latitude of Station"))) +
-  xlab(expression(bold("Hour of Daily Minimum Equilibrium Model DO (24-hour clock)"))) +
+  xlab(expression(bold("Specific Conductivity (uS/cm)"))) +
   theme(
     text = element_text(size = 50),
     axis.text.y = element_text(size = 44),
@@ -498,7 +507,9 @@ gg.conmon.sum
 gg.conmon.sum <- ggplot(conmon.ts.sum,
                 aes(
                   x =  sp_cond_at_do_min,
-                  y = as.character(latitude),
+                  y = 
+                             forcats::fct_rev(forcats::fct_reorder(as.factor(station),
+                                 signif(potomac_river_km, 3))),
                   fill = stat(x)
                 )) +
   ggridges::geom_density_ridges_gradient() +
@@ -532,12 +543,10 @@ gg.conmon.sum <- ggplot(conmon.ts.sum,
                                  signif(potomac_river_km, 3))),
                   fill = stat(x)
                   ))+
-  ggridges::geom_density_ridges_gradient() +
-  ## scale_x_continuous(limits = c(0, 24), breaks =0:24) +
+  ggridges::geom_density_ridges_gradient(bandwidth = 1) +
+  ## scale_x_continuous(breaks=c(0,5,10,15,20)) +
   scale_fill_viridis_c(name = "Hour (0-24)", option = "C") +
   labs(title = 'Daily Minimum DO Solar Timing', subtitle = "Potomac River Conmon, 2007-2008") +
-  ## scale_y_discrete(expand = c(0, 0)) +
-  ## xlim(0, 24) +
   coord_cartesian(clip = "off") +
   ggridges::theme_ridges(grid = FALSE, center_axis_labels = TRUE) +
   labs( y = expression(atop(bold("Stations in Longitudinal Order"))),
@@ -589,6 +598,181 @@ gg.conmon.sum
 
 ```
 
+Exploring general statistics of morning and evening minia
+
+```{r}
+
+conmon.sum.minima_class <- conmon.ts.sum %>%
+  group_by(station, potomac_river_km, year, do_time_min_class) %>%
+  summarize(
+    do_mean_minima_mgl = mean(do_mgl_min),
+    do_mean_minima_solar_hour = mean(do_solar_hour_min),
+    do_relative_depth = mean(depth_mean_rounded)/max(depth_mean_rounded)
+    ) %>%
+  arrange(potomac_river_km)
+
+library(ggpmisc)
+pal <- wesanderson::wes_palette("zissou1", 10, type = "continuous")
+
+gg.conmon.regs <- ggplot(conmon.sum.minima_class,
+## gg.conmon <- ggplot(conmon.ts[conmon.ts$year == 2022,],
+                aes(
+                    x = forcats::fct_reorder(as.factor(station),
+                                 signif(potomac_river_km, 3)),
+                    y = do_mean_minima_mgl
+                  ), col = station) +
+  geom_point() +
+  ## geom_line(aes(diel, act)) +
+  ## scale_color_discrete(colours = pal) +
+  ## scale_color_gradientn(colours = pal) +
+  ## stat_poly_line(formula = y ~ sin(2*pi/per*x)+cos(2*pi/per*x)+sin(4*pi/per*x)+cos(4*pi/per*x)) +
+  stat_poly_line() +
+  stat_poly_eq(use_label(c("eq", "r2", "p"), sep = "*\"; \"*"),
+                     size = 10,
+                     ## label.y = 0.75,
+                     ) +
+  theme_bw() +
+  theme(
+    text = element_text(size = 36),
+    axis.text.y = element_text(size = 22),
+    plot.title = element_text(size = 36)
+  ) +
+  facet_wrap(~do_time_min_class) +
+  geom_hline(yintercept = 0, col = 'black', size = 0.75) +
+  theme_minimal() +
+  theme(
+    text = element_text(size = 50),
+    axis.text.y = element_text(size = 54),
+    axis.text.x = element_text(size = 42, angle = 90),
+    plot.title = element_text(size = 56)
+  ) +
+  xlab("stations in upstream to downstream order") +
+  ylab("mean do mg/l value at minima")
+
+gg.conmon.regs
+
+```
+
+Get NOAA tide height from nearest gauge
+
+``` {r}
+# DC NOAA station: 8594900
+# Dahlgren, VA 8635027
+# Lewisetta 8635750
+
+## potomac_ds_tide <- rnoaa::coops_search(
+##   begin_date = "20070101",
+##   end_date = "20081231",
+##   station_name = 8635750, 
+##   "water_level",
+##   datum = "NAVD",
+##   units = "metric",
+##   time_zone = "gmt",
+##   application = "rnoaa"
+## )
+
+lewisetta_noaa_wl_07 <- read.csv("./data/tides//CO-OPS_8635750_wl_2007.csv")
+lewisetta_noaa_wl_08 <- read.csv("./data/tides//CO-OPS_8635750_wl_2008.csv")
+
+lewisetta_tides <- rbind(lewisetta_noaa_wl_07, lewisetta_noaa_wl_08) %>%
+  mutate(
+    date = as.Date(gsub("/", "-", Date))
+  ) %>%
+  group_by(date) %>%
+  summarize(water_level = mean(Verified..ft.))
+
+conmon.ts.sum.tides <- conmon.ts.sum %>%
+  left_join(lewisetta_tides, by = "date")
+
+conmon.sum.minima_class <- conmon.ts.sum.tides %>%
+  group_by(station, potomac_river_km, year, do_time_min_class) %>%
+  summarize(
+    do_mean_minima_mgl = mean(do_mgl_min),
+    do_mean_minima_solar_hour = mean(do_solar_hour_min),
+    do_relative_depth = mean(depth_mean_rounded)/max(depth_mean_rounded),
+    do_mean_tide = mean(water_level),
+    do_mean_relative_tide = mean(water_level/max(water_level)),
+    ) %>%
+  arrange(potomac_river_km)
+
+gg.conmon.regs <- ggplot(conmon.sum.minima_class,
+## gg.conmon <- ggplot(conmon.ts[conmon.ts$year == 2022,],
+                aes(
+                    x = forcats::fct_reorder(as.factor(station),
+                                 signif(potomac_river_km, 3)),
+                  y = do_mean_relative_tide,
+                  col = as.character(year)
+                  )) +
+  geom_point() +
+  ## geom_line(aes(diel, act)) +
+  ## scale_color_discrete(colours = pal) +
+  ## scale_color_gradientn(colours = pal) +
+  ## stat_poly_line(formula = y ~ sin(2*pi/per*x)+cos(2*pi/per*x)+sin(4*pi/per*x)+cos(4*pi/per*x)) +
+  stat_poly_line() +
+  stat_poly_eq(use_label(c("eq", "r2", "p"), sep = "*\"; \"*"),
+                     size = 10,
+                     ## label.y = 0.75,
+                     ) +
+  theme_bw() +
+  theme(
+    text = element_text(size = 36),
+    axis.text.y = element_text(size = 22),
+    plot.title = element_text(size = 36)
+  ) +
+  facet_wrap(~do_time_min_class) +
+  geom_hline(yintercept = 0, col = 'black', size = 0.75) +
+  theme_minimal() +
+  theme(
+    text = element_text(size = 50),
+    axis.text.y = element_text(size = 54),
+    axis.text.x = element_text(size = 42, angle = 90),
+    plot.title = element_text(size = 56)
+  ) +
+  xlab("stations in upstream to downstream order") +
+  ylab("Relative Tidal Strength (mean water level / max water level)\nat time of DO minima")
+
+gg.conmon.regs
+
+
+gg.conmon.regs <- ggplot(conmon.sum.minima_class,
+## gg.conmon <- ggplot(conmon.ts[conmon.ts$year == 2022,],
+                aes(
+                    x = forcats::fct_reorder(as.factor(station),
+                                 signif(potomac_river_km, 3)),
+                  y = do_mean_minima_mgl,
+                  col = as.character(year)
+                  )) +
+  geom_point(size = 3) +
+  ## geom_line(aes(diel, act)) +
+  ## scale_color_discrete(colours = pal) +
+  ## scale_color_gradientn(colours = pal) +
+  ## stat_poly_line(formula = y ~ sin(2*pi/per*x)+cos(2*pi/per*x)+sin(4*pi/per*x)+cos(4*pi/per*x)) +
+  stat_poly_line() +
+  stat_poly_eq(use_label(c("eq", "r2", "p"), sep = "*\"; \"*"),
+                     size = 10,
+                     ## label.y = 0.75,
+                     ) +
+  theme_bw() +
+  theme(
+    text = element_text(size = 36),
+    axis.text.y = element_text(size = 22),
+    plot.title = element_text(size = 36)
+  ) +
+  facet_wrap(~do_time_min_class) +
+  geom_hline(yintercept = 0, col = 'black', size = 0.75) +
+  theme_minimal() +
+  theme(
+    text = element_text(size = 50),
+    axis.text.y = element_text(size = 54),
+    axis.text.x = element_text(size = 42, angle = 90),
+    plot.title = element_text(size = 56)
+  ) +
+  xlab("stations in upstream to downstream order") +
+  ylab("Mean DO mg/L at minima")
+
+gg.conmon.regs
+
+```
 
 Equilibirum simple show plot
 
@@ -635,8 +819,6 @@ gg.conmon.eq.boxplot
 
 ```{r}
 
-library(ggpmisc)
-pal <- wesanderson::wes_palette("Zissou1", 10, type = "continuous")
 
 
 subset_stations <- c("POH002.10", "WES000.18", "POM000.97", "MON000.18")
@@ -814,8 +996,8 @@ cmn.poh.sum <- cmn.poh.sum[order(cmn.poh.sum$potomac_river_km),]
 gg.conmon.regs <- ggplot(cmn.poh.sum,
 ## gg.conmon <- ggplot(conmon.ts[conmon.ts$year == 2022,],
                 aes(
-                  x = do_mgl_from_eq_max,
-                  y = do_mgl_from_eq_min,
+                  x = do_mgl_max,
+                  y = do_mgl_min,
                   col = (windspeed_mean)
                 )) +
   geom_point() +
@@ -834,7 +1016,7 @@ gg.conmon.regs <- ggplot(cmn.poh.sum,
     axis.text.y = element_text(size = 22),
     plot.title = element_text(size = 36)
   ) +
-  facet_wrap(~station + month) +
+  facet_wrap(~station + season) +
   geom_hline(yintercept = 0, col = 'black', size = 0.75)
 
 gg.conmon.regs
@@ -877,9 +1059,9 @@ gg.conmon.noaa <- ggplot(cmn.poh.sum,
   geom_point() +
   scale_color_gradientn(colours = pal, name = 'skycover\n') +
   stat_poly_line() +
-  stat_poly_eq(use_label(c("eq", "R2", "p"), sep = "*\"; \"*"),
+  stat_poly_eq(use_label(c("R2", "p"), sep = "*\"; \"*"),
                      size = 10,
-                     ## label.y = 0.75,
+                     label.y = -250,
                      ) +
   theme_bw() +
   theme(
@@ -888,7 +1070,7 @@ gg.conmon.noaa <- ggplot(cmn.poh.sum,
     plot.title = element_text(size = 56)
   ) +
   ## ylim(-2.75,7.5) +
-  facet_wrap(~month+station) +
+  facet_wrap(~station + season) +
   ggtitle(paste0("Air Temp (C) vs DO (mg/L from eq.) at ", station),
           subtitle = paste0('colored by nearest NOAA gage skycover data')) +
   geom_hline(yintercept = 0, col = 'black', size = 0.75)
@@ -896,17 +1078,13 @@ gg.conmon.noaa <- ggplot(cmn.poh.sum,
 gg.conmon.noaa
 
 
-gg.conmon.noaa <- ggplot(cmn.poh.sum
-                ) +
-  geom_point(
+gg.conmon.noaa <- ggplot(cmn.poh.sum,
                 aes(
                   x = do_mgl_from_eq_diel_production,
                   y = do_mgl_from_eq_diel_respiration,
-                  col = dewtemp_mean
-                )
-  )
-
-+
+                  col = air_temp_mean
+                )) +
+      geom_point() + 
   scale_color_gradientn(colours = pal)+ #, name = '\n') +
   stat_poly_line() +
   stat_poly_eq(use_label(c("eq", "R2", "p"), sep = "*\"; \"*"),
@@ -921,7 +1099,7 @@ gg.conmon.noaa <- ggplot(cmn.poh.sum
   ) +
   ## ylim(-2.75,7.5) +
   ## scale_x_log10() +
-  ## facet_wrap(~season+station) +
+  facet_wrap(~station + season) +
   ggtitle(paste0("Sunrise-Sunset DO Production (eq-subtracted mgl) vs Sunset-Sunrise DO Consumption (eq-subtracted mgl) at ", station),
           subtitle = paste0('colored by nearest NOAA gage weather data')) +
   geom_hline(yintercept = 0, col = 'black', size = 0.75)
